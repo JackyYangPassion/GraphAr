@@ -96,7 +96,8 @@ function(build_arrow)
 
     include(ExternalProject)
     externalproject_add(arrow_ep
-            URL "${GAR_ARROW_SOURCE_FILE}"
+            GIT_REPOSITORY "https://github.com/acezen/arrow.git"
+            GIT_TAG encoding-graphar
             SOURCE_SUBDIR cpp
             BINARY_DIR "${GAR_ARROW_BINARY_DIR}"
             CMAKE_ARGS "${GAR_ARROW_CMAKE_ARGS}"
