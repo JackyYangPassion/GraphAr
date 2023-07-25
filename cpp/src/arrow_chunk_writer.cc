@@ -22,6 +22,8 @@ limitations under the License.
 #else
 #include "arrow/compute/exec/exec_plan.h"
 #endif
+#include "arrow/compute/api.h"
+#include "arrow/compute/expression.h"
 #include "arrow/dataset/dataset.h"
 #include "arrow/dataset/file_base.h"
 #include "arrow/dataset/file_parquet.h"
@@ -806,6 +808,55 @@ Result<std::shared_ptr<arrow::Table>> EdgeChunkWriter::sortTable(
           .status());
   return ExecutePlanAndCollectAsTable(*exec_context, plan,
                                       input_table->schema(), sink_gen);
+}
+
+std::shared_ptr<arrow::Table> DoHashJoin(
+    const std::shared_ptr<arrow::Table>& l_table,
+    const std::shared_ptr<arrow::Table>& r_table,
+    const std::string& l_key, const std::string& r_key) {
+  auto l_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(l_table));
+  auto r_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(r_table));
+
+  arrow::dataset::internal::Initialize();
+  auto l_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  l_options->projection = arrow::compute::project({}, {});
+
+  auto r_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  r_options->projection = arrow::compute::project({}, {});
+
+  auto r_schema = r_dataset->schema();
+  std::vector<arrow::FieldRef> r_output_fields;
+  for (auto& field : r_schema->fields()) {
+    if (field->name() != r_key) {
+      r_output_fields.push_back(field->name());
+    }
+  }
+
+  // construct the scan node
+  auto l_scan_node_options = arrow::dataset::ScanNodeOptions{l_dataset, l_options};
+  auto r_scan_node_options = arrow::dataset::ScanNodeOptions{r_dataset, r_options};
+
+  arrow::acero::Declaration left{"scan", std::move(l_scan_node_options)};
+  arrow::acero::Declaration right{"scan", std::move(r_scan_node_options)};
+
+  arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
+                                              /*in_left_keys=*/{"id"},
+                                              /*in_right_keys=*/{r_key},
+                                              {l_key},
+                                              r_output_fields,
+                                              /*filter*/ arrow::compute::literal(true),
+                                              /*output_suffix_for_left*/ "_l",
+                                              /*output_suffix_for_right*/ "_r"};
+  arrow::acero::Declaration hashjoin{
+      "hashjoin", {std::move(left), std::move(right)}, join_opts};
+
+  // expected columns l_a, l_b
+  std::shared_ptr<arrow::Table> response_table = arrow::acero::DeclarationToTable(std::move(hashjoin)).ValueOrDie();
+  return response_table;
 }
 
 }  // namespace GAR_NAMESPACE_INTERNAL

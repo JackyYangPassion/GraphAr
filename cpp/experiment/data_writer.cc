@@ -26,6 +26,15 @@ limitations under the License.
 #include "parquet/arrow/reader.h"
 #include "parquet/arrow/writer.h"
 
+/*
+#include "arrow/acero/exec_plan.h"
+#include "arrow/compute/api.h"
+#include "arrow/compute/expression.h"
+#include "arrow/dataset/dataset.h"
+#include "arrow/dataset/plan.h"
+#include "arrow/dataset/scanner.h"
+*/
+
 #include "gar/graph_info.h"
 #include "gar/writer/arrow_chunk_writer.h"
 
@@ -53,95 +62,87 @@ std::shared_ptr<arrow::Table> read_csv_to_arrow_table(
   return table;
 }
 
-std::shared_ptr<arrow::Table> read_parquet_to_arrow_table(
-    const std::string& parquet_file) {
-  arrow::io::IOContext io_context = arrow::io::default_io_context();
-
-  auto fs = arrow::fs::FileSystemFromUriOrPath(parquet_file).ValueOrDie();
-  std::shared_ptr<arrow::io::InputStream> input =
-      fs->OpenInputStream(parquet_file).ValueOrDie();
-
-  auto maybe_reader = parquet::arrow::FileReader::Make(io_context, input);
-  std::shared_ptr<parquet::arrow::FileReader> reader = *maybe_reader;
-
-  auto maybe_table = reader->ReadTable();
-  std::shared_ptr<arrow::Table> table = *maybe_table;
-  return table;
-}
-
 std::shared_ptr<arrow::Table> add_index_column(
-    const std::shared_ptr<arrow::Table>& table) {
+    const std::shared_ptr<arrow::Table>& table, bool is_src=true) {
   // arrow::Int64Builder index_builder;
   // Get the number of rows in the table
   int64_t num_rows = table->num_rows();
   // Create an array containing the row numbers
-  auto row_numbers = ArrayFromBuilder(Int64Builder(), [&](Int64Builder& builder) {
-    for (int64_t i = 0; i < num_rows; i++) {
-      builder.Append(i);
-    }
-  });
+  arrow::Int64Builder builder;
+  for (int64_t i = 0; i < num_rows; i++) {
+    builder.Append(i);
+  }
+  std::shared_ptr<arrow::Array> row_numbers;
+  builder.Finish(&row_numbers);
+  // std::shard_ptr<arrow::Field> field = std::make_shared<arrow::Field>(
+  //     "index", arrow::int64(), /*nullable=*/false);
+  std::string col_name = is_src ? GAR_NAMESPACE_INTERNAL::GeneralParams::kSrcIndexCol : GAR_NAMESPACE_INTERNAL::GeneralParams::kDstIndexCol ;
+  auto new_field = arrow::field(col_name, arrow::int64());
+  auto chunked_array = arrow::ChunkedArray::Make({row_numbers}).ValueOrDie();
   // Create a new table with the row numbers column
-  auto new_table = Table::Make(schema({field("index", int64()),
-                                       table->schema()->field(0),
-                                       table->schema()->field(1)}),
-                                {row_numbers, table->column(0), table->column(1)});
+  auto new_table = table->AddColumn(0, new_field, chunked_array).ValueOrDie();
   return new_table;
 }
 
-std::shared_ptr<arrow::Table> DoHashJoin(
-    const std::shared_ptr<arrow::dataset::Dataset>& l_dataset,
-    const std::shared_ptr<arrow::dataset::Dataset>& r_dataset,
-    const std::string& l_key, const std::string& r_key) {
-  auto l_options = std::make_shared<arrow::dataset::ScanOptions>();
-  // create empty projection: "default" projection where each field is mapped to a
-  // field_ref
-  l_options->projection = cp::project({}, {});
-
-  auto r_options = std::make_shared<arrow::dataset::ScanOptions>();
-  // create empty projection: "default" projection where each field is mapped to a
-  // field_ref
-  r_options->projection = cp::project({}, {});
-
-  // construct the scan node
-  auto l_scan_node_options = arrow::dataset::ScanNodeOptions{l_dataset, l_options};
-  auto r_scan_node_options = arrow::dataset::ScanNodeOptions{r_dataset, r_options};
-
-  arrow::acero::Declaration left{"scan", std::move(l_scan_node_options)};
-  arrow::acero::Declaration right{"scan", std::move(r_scan_node_options)};
-
-  arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
-                                              /*in_left_keys=*/{l_key},
-                                              /*in_right_keys=*/{r_key},
-                                              /*filter*/ arrow::compute::literal(true),
-                                              /*output_suffix_for_left*/ "_l",
-                                              /*output_suffix_for_right*/ "_r"};
-  arrow::acero::Declaration hashjoin{
-      "hashjoin", {std::move(left), std::move(right)}, join_opts};
-
-  // expected columns l_a, l_b
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Table> response_table,
-                        arrow::acero::DeclarationToTable(std::move(hashjoin)));
-  return response_table;
-}
-
 GraphArchive::Status write_to_graphar(
-    const std::string& vertex_source_file,
+    const std::string& graph_info_file,
+    const std::string& src_label,
+    const std::string& edge_label,
+    const std::string& dst_label,
+    const std::string& src_vertex_source_file,
     const std::string& edge_source_file,
-    const std::string& graph_info_file) {
+    const std::string& dst_vertex_source_file) {
     // read vertex source to arrow table
-    auto vertex_table = read_csv_to_arrow_table(vertex_source_file);
+    auto dst_vertex_table = read_csv_to_arrow_table(dst_vertex_source_file);
     auto edge_table = read_csv_to_arrow_table(edge_source_file);
-    std::string vertex_label = "person";
+    auto dst_vertex_table_with_index = add_index_column(dst_vertex_table, false);
+    dst_vertex_table.reset();
     // auto& vertex_info = graph_info.GetVertexInfo(vertex_label).value();
-    auto new_vertex_table = add_index_column(vertex_table);
-    auto join_table = DoHashJoin(new_vertex_table, edge_table, "index", "src");
-    std::cout << "Join result: " << join_table->ToString() << std::endl;
+    auto edge_table_with_dst_index = GAR_NAMESPACE::DoHashJoin(dst_vertex_table_with_index, edge_table, GAR_NAMESPACE_INTERNAL::GeneralParams::kDstIndexCol, "dst");
+    edge_table.reset();
+    std::shared_ptr<arrow::Table> src_vertex_table_with_index;
+    if (src_label == dst_label) {
+      // rename the column name
+      auto old_schema = dst_vertex_table_with_index->schema();
+      std::vector<std::string> new_names;
+      for (int i = 0; i < old_schema->num_fields(); i++) {
+        if (old_schema->field(i)->name() == GAR_NAMESPACE::GeneralParams::kDstIndexCol) {
+          // Create a new field with the new name and the same data type as the old field
+          new_names.push_back(GAR_NAMESPACE::GeneralParams::kSrcIndexCol);
+        } else {
+          // Copy over the old field
+          new_names.push_back(old_schema->field(i)->name());
+        }
+      }
+      src_vertex_table_with_index = dst_vertex_table_with_index->RenameColumns(new_names).ValueOrDie();
+    } else {
+      auto src_vertex_table = read_csv_to_arrow_table(src_vertex_source_file);
+      src_vertex_table_with_index = add_index_column(src_vertex_table, true);
+    }
+    dst_vertex_table_with_index.reset();
+    auto edge_table_with_src_dst_index = GAR_NAMESPACE::DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, GAR_NAMESPACE_INTERNAL::GeneralParams::kSrcIndexCol, "src");
+
+    auto graph_info_result = GAR_NAMESPACE::GraphInfo::Load(graph_info_file);
+    if (graph_info_result.has_error()) {
+      std::cout << graph_info_result.status().message() << std::endl;
+    }
+    auto& graph_info = graph_info_result.value();
+    auto& edge_info = graph_info.GetEdgeInfo(src_label, edge_label, dst_label).value();
+    auto adj_list_type = GAR_NAMESPACE::AdjListType::ordered_by_source;
+    GAR_NAMESPACE::EdgeChunkWriter writer(edge_info, graph_info.GetPrefix(), adj_list_type);
+    writer.WriteTable(edge_table_with_src_dst_index, 0, 0);
+    writer.WriteEdgesNum(0, edge_table_with_src_dst_index->num_rows());
+    writer.WriteVerticesNum(src_vertex_table_with_index->num_rows());
     return GraphArchive::Status::OK();
 }
 
 int main(int argc, char* argv[]) {
-   std::string vertex_source file = std::string(argv[1]);
-   std::string edge_source_file = std::string(argv[2]);
-   std::string graph_info_file = std::string(argv[3]);
-   write_to_graphar(vertex_source_file, edge_source_file, graph_info_file);
+   std::string graph_info_file = std::string(argv[1]);
+   std::string src_label = std::string(argv[2]);
+   std::string edge_label = std::string(argv[3]);
+   std::string dst_label = std::string(argv[4]);
+   std::string src_vertex_source_file = std::string(argv[5]);
+   std::string edge_source_file = std::string(argv[6]);
+   std::string dst_vertex_source_file = std::string(argv[7]);
+   write_to_graphar(graph_info_file, src_label, edge_label, dst_label, src_vertex_source_file, edge_source_file, dst_vertex_source_file);
 }

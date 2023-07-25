@@ -736,5 +736,10 @@ class EdgeChunkWriter {
   ValidateLevel validate_level_;
 };
 
+std::shared_ptr<arrow::Table> DoHashJoin(
+    const std::shared_ptr<arrow::Table>& l_table,
+    const std::shared_ptr<arrow::Table>& r_table,
+    const std::string& l_key, const std::string& r_key);
+
 }  // namespace GAR_NAMESPACE_INTERNAL
 #endif  // GAR_WRITER_ARROW_CHUNK_WRITER_H_

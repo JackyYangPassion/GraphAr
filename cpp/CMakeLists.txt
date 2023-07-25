@@ -26,6 +26,7 @@ project(graph-archive LANGUAGES C CXX VERSION ${GAR_VERSION})
 option(NAMESPACE "User specific namespace, default if GraphArchive" OFF)
 option(BUILD_TESTS "Build unit tests" OFF)
 option(BUILD_EXAMPLES "Build examples" OFF)
+option(BUILD_EXPERIMENT "Build experiment" ON)
 
 if (NAMESPACE)
   add_definitions(-DGAR_NAMESPACE=${NAMESPACE})
@@ -197,6 +198,8 @@ macro(build_gar)
         target_link_libraries(gar PRIVATE -Wl,--exclude-libs,ALL -Wl,--whole-archive gar_arrow_static
             "${GAR_PARQUET_STATIC_LIB}"
             "${GAR_ARROW_ACERO_STATIC_LIB}"
+            "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_dataset.a"
+            "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_acero.a"
             "${GAR_ARROW_BUNDLED_DEPS_STATIC_LIB}" -Wl,--no-whole-archive)
     endif()
 
@@ -249,6 +252,39 @@ if (BUILD_EXAMPLES)
         if (CURL_FOUND)
             target_link_libraries(${E_NAME} PRIVATE CURL::libcurl)
         endif()
+    endforeach()
+endif()
+
+if (BUILD_EXPERIMENT)
+    file(GLOB EXAMPLE_FILES RELATIVE "${PROJECT_SOURCE_DIR}/experiment" "${PROJECT_SOURCE_DIR}/experiment/*.cc")
+    foreach(f ${EXAMPLE_FILES})
+        string(REGEX MATCH "^(.*)\\.[^.]*$" dummy ${f})
+        set(E_NAME ${CMAKE_MATCH_1})
+        message(STATUS "Found experiment - " ${E_NAME})
+        add_executable(${E_NAME} experiment/${E_NAME}.cc)
+        target_include_directories(${E_NAME} PRIVATE experiment ${PROJECT_SOURCE_DIR}/include)
+        target_include_directories(${E_NAME} SYSTEM BEFORE PRIVATE ${GAR_ARROW_INCLUDE_DIR})
+        target_link_libraries(${E_NAME} PRIVATE gar Threads::Threads ${CMAKE_DL_LIBS})
+        if(APPLE)
+            target_link_libraries(${E_NAME} PRIVATE -Wl,-force_load gar_arrow_static
+                "${GAR_PARQUET_STATIC_LIB}"
+                "${GAR_ARROW_BUNDLED_DEPS_STATIC_LIB}")
+        else()
+            target_link_libraries(${E_NAME} PRIVATE -Wl,--exclude-libs,ALL -Wl,--whole-archive gar_arrow_static
+                "${GAR_PARQUET_STATIC_LIB}"
+                "${GAR_ARROW_BUNDLED_DEPS_STATIC_LIB}" -Wl,--no-whole-archive)
+        endif()
+
+        # if OpenSSL library exists, link the OpenSSL library.
+        # OpenSSL has to be linked after GAR_ARROW_BUNDLED_DEPS_STATIC_LIB
+        if(OPENSSL_FOUND)
+            target_link_libraries(${E_NAME} PRIVATE OpenSSL::SSL)
+        endif()
+        if (CURL_FOUND)
+            target_link_libraries(${E_NAME} PRIVATE CURL::libcurl)
+        endif()
+        # target_link_libraries(${E_NAME} PRIVATE "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_dataset.a")
+        # target_link_libraries(${E_NAME} PRIVATE "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_acero.a")
     endforeach()
 endif()
 
