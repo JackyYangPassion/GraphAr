@@ -195,11 +195,11 @@ macro(build_gar)
             "${GAR_ACERO_STATIC_LIB}"
             "${GAR_ARROW_BUNDLED_DEPS_STATIC_LIB}")
     else()
+        message(STATUS "GAR_ARROW_ACERO_STATIC_LIB" "${GAR_ARROW_ACERO_STATIC_LIB}")
         target_link_libraries(gar PRIVATE -Wl,--exclude-libs,ALL -Wl,--whole-archive gar_arrow_static
             "${GAR_PARQUET_STATIC_LIB}"
             "${GAR_ARROW_ACERO_STATIC_LIB}"
-            "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_dataset.a"
-            "/workspaces/GraphAr/build/arrow_ep-prefix/lib/libarrow_acero.a"
+            "${GAR_ARROW_DATASET_STATIC_LIB}"
             "${GAR_ARROW_BUNDLED_DEPS_STATIC_LIB}" -Wl,--no-whole-archive)
     endif()
 

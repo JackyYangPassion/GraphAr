@@ -226,7 +226,7 @@ Status FileSystem::WriteTableToFile(const std::shared_ptr<arrow::Table>& table,
     builder.disable_dictionary("_graphArSrcIndex");
     builder.encoding("_graphArSrcIndex", parquet::Encoding::RLE);  // enable encoding
     builder.disable_dictionary("_graphArDstIndex");
-    builder.encoding("_graphArDstIndex", parquet::Encoding::DELTA_BINARY_PACKED);  // enable encoding
+    builder.encoding("_graphArDstIndex", parquet::Encoding::DELTA_BINARY_PACKED_FOR_BIT_MAP);  // enable encoding
     RETURN_NOT_ARROW_OK(parquet::arrow::WriteTable(
         *table, arrow::default_memory_pool(), output_stream, 64 * 1024 * 1024,
         builder.build(), parquet::default_arrow_writer_properties()));
